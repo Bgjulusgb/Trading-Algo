@@ -45,6 +45,14 @@ pip install streamlit pandas numpy plotly yfinance
 pip install alpaca-trade-api  # Für Live-Trading
 ```
 
+### Für Windows (falls Probleme auftreten):
+```bash
+pip install --upgrade pip
+pip install wheel
+pip install streamlit pandas numpy plotly yfinance
+pip install alpaca-trade-api
+```
+
 ### Alpaca API Setup
 1. **Konto erstellen**: [alpaca.markets](https://alpaca.markets/)
 2. **API-Schlüssel generieren**: Dashboard → API Keys

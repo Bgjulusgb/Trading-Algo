@@ -208,7 +208,12 @@ class OrderManager:
 
         if ALPACA_AVAILABLE and api_key and api_secret:
             try:
-                self.api = tradeapi.REST(api_key, api_secret, base_url, api_version='v2')
+                self.api = tradeapi.REST(
+                    key_id=api_key,
+                    secret_key=api_secret,
+                    base_url=base_url,
+                    api_version='v2'
+                )
                 st.success("✅ Alpaca API Connected Successfully!")
             except Exception as e:
                 st.error(f"❌ Failed to connect to Alpaca API: {str(e)}")
@@ -270,10 +275,13 @@ class OrderManager:
 
             if main_order and main_order.status == 'filled':
                 # Submit take profit order
+                tp_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
+                sl_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
+
                 tp_order = self.api.submit_order(
                     symbol=symbol,
                     qty=qty,
-                    side=OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY,
+                    side=tp_side,
                     type=OrderType.LIMIT,
                     limit_price=take_profit_price,
                     time_in_force='gtc'
@@ -283,7 +291,7 @@ class OrderManager:
                 sl_order = self.api.submit_order(
                     symbol=symbol,
                     qty=qty,
-                    side=OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY,
+                    side=sl_side,
                     type=OrderType.STOP,
                     stop_price=stop_loss_price,
                     time_in_force='gtc'
@@ -317,18 +325,6 @@ class OrderManager:
             st.error(f"❌ Failed to get account info: {str(e)}")
             return None
 
-    def get_positions(self):
-        """Get current positions"""
-        if not self.api:
-            return []
-
-        try:
-            positions = self.api.list_positions()
-            return positions
-        except Exception as e:
-            st.error(f"❌ Failed to get positions: {str(e)}")
-            return []
-
     def cancel_order(self, order_id):
         """Cancel an order"""
         if not self.api:
@@ -353,11 +349,22 @@ class EnhancedTradingSystem(TradingSystem):
 
     def execute_live_trade(self, symbol, signal, quantity, take_profit_pct=0.05, stop_loss_pct=0.02):
         """Execute a live trade with risk management"""
-        if signal == "BUY":
-            # Get current price for bracket order
-            try:
+        try:
+            if signal == "BUY":
+                # Get current price for bracket order
                 stock = yf.Ticker(symbol)
-                current_price = stock.history(period='1d')['Close'].iloc[-1]
+                data = stock.history(period='1d')
+
+                if data.empty:
+                    st.error(f"❌ No data available for {symbol}")
+                    return None
+
+                current_price = data['Close'].iloc[-1]
+
+                # Validate price
+                if current_price <= 0:
+                    st.error(f"❌ Invalid price for {symbol}: ${current_price}")
+                    return None
 
                 # Calculate take profit and stop loss prices
                 take_profit_price = current_price * (1 + take_profit_pct)
@@ -373,31 +380,33 @@ class EnhancedTradingSystem(TradingSystem):
                 )
 
                 if bracket_order:
-                    st.success(f"✅ Bracket order placed for {symbol}: TP @ ${take_profit_price".2f"}, SL @ ${stop_loss_price".2f"}")
+                    st.success(f"✅ Bracket order placed for {symbol}: TP @ ${take_profit_price:.2f}, SL @ ${stop_loss_price:.2f}")
                     return bracket_order
                 else:
                     st.error("❌ Failed to place bracket order")
                     return None
+            elif signal == "SELL":
+                # For sell orders, just submit a market order
+                order = self.order_manager.submit_order(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.MARKET
+                )
 
-            except Exception as e:
-                st.error(f"❌ Error executing trade: {str(e)}")
-                return None
-
-        elif signal == "SELL":
-            # For sell orders, just submit a market order
-            order = self.order_manager.submit_order(
-                symbol=symbol,
-                qty=quantity,
-                side=OrderSide.SELL,
-                order_type=OrderType.MARKET
-            )
-
-            if order:
-                st.success(f"✅ Sell order placed for {symbol}")
-                return order
+                if order:
+                    st.success(f"✅ Sell order placed for {symbol}")
+                    return order
+                else:
+                    st.error("❌ Failed to place sell order")
+                    return None
             else:
-                st.error("❌ Failed to place sell order")
+                st.warning(f"⚠️ Invalid signal: {signal}")
                 return None
+
+        except Exception as e:
+            st.error(f"❌ Error executing trade: {str(e)}")
+            return None
 
     def get_real_time_quote(self, symbol):
         """Get real-time quote using Yahoo Finance"""
@@ -418,22 +427,31 @@ class EnhancedTradingSystem(TradingSystem):
                 # Get latest data
                 data = self.get_stock_data(symbol, '3mo')
 
-                if data is not None:
+                if data is not None and not data.empty and len(data) > 50:
                     signal = self.signal_manager.generate_combined_signal(symbol, data)
                     current_price = data['Close'].iloc[-1]
+
+                    # Calculate indicators safely
+                    rsi = self.calculate_rsi(data['Close'])
+                    rsi_value = rsi.iloc[-1] if not rsi.empty else 50
+
+                    sma_20 = data['SMA_20'].iloc[-1] if 'SMA_20' in data.columns else data['Close'].iloc[-1]
+                    sma_50 = data['SMA_50'].iloc[-1] if 'SMA_50' in data.columns else data['Close'].iloc[-1]
 
                     signals_data[symbol] = {
                         'signal': signal,
                         'price': current_price,
                         'timestamp': datetime.now(),
                         'indicators': {
-                            'RSI': self.calculate_rsi(data['Close']).iloc[-1],
-                            'SMA_20': data['SMA_20'].iloc[-1],
-                            'SMA_50': data['SMA_50'].iloc[-1]
+                            'RSI': rsi_value,
+                            'SMA_20': sma_20,
+                            'SMA_50': sma_50
                         }
                     }
+                else:
+                    st.warning(f"⚠️ Insufficient data for {symbol}")
             except Exception as e:
-                st.error(f"❌ Error monitoring {symbol}: {str(e)}")
+                st.warning(f"⚠️ Error monitoring {symbol}: {str(e)}")
 
         return signals_data
 
@@ -467,14 +485,27 @@ class LiveDataFeed:
             try:
                 stock = yf.Ticker(symbol)
                 data = stock.history(period='1d', interval='5m')  # 5-minute intervals
-                if not data.empty:
+                if not data.empty and len(data) >= 2:
+                    current_price = data['Close'].iloc[-1]
+                    previous_price = data['Close'].iloc[-2]
+                    change = (current_price - previous_price) / previous_price * 100
+
                     prices[symbol] = {
-                        'price': data['Close'].iloc[-1],
-                        'change': (data['Close'].iloc[-1] - data['Close'].iloc[-2]) / data['Close'].iloc[-2] * 100,
-                        'volume': data['Volume'].iloc[-1]
+                        'price': current_price,
+                        'change': change,
+                        'volume': data['Volume'].iloc[-1] if 'Volume' in data.columns else 0
                     }
+                else:
+                    # Fallback to daily data if 5m data is not available
+                    data = stock.history(period='5d')
+                    if not data.empty:
+                        prices[symbol] = {
+                            'price': data['Close'].iloc[-1],
+                            'change': (data['Close'].iloc[-1] - data['Close'].iloc[-2]) / data['Close'].iloc[-2] * 100 if len(data) >= 2 else 0,
+                            'volume': data['Volume'].iloc[-1] if 'Volume' in data.columns else 0
+                        }
             except Exception as e:
-                st.error(f"❌ Error fetching price for {symbol}: {str(e)}")
+                st.warning(f"⚠️ Could not fetch data for {symbol}: {str(e)}")
 
         return prices
 
@@ -754,10 +785,10 @@ def main():
                     with cols[i]:
                         st.metric(
                             label=symbol,
-                            value=f"${data['price']".2f"}",
-                            delta=f"{data['change']".2f"}%"
+                            value=f"${data['price']:.2f}",
+                            delta=f"{data['change']:.2f}%"
                         )
-                        st.caption(f"Volume: {data['volume']","}")
+                        st.caption(f"Volume: {data['volume']:,}")
 
             # Live Signal Monitor
             with st.expander("🔄 Live Signal Monitor"):
@@ -770,7 +801,7 @@ def main():
                     for symbol, signal_data in live_signals.items():
                         cols = st.columns([2, 1, 1, 1])
                         cols[0].write(f"**{symbol}**")
-                        cols[1].write(f"${signal_data['price']".2f"}")
+                        cols[1].write(f"${signal_data['price']:.2f}")
 
                         if signal_data['signal'] == 'BUY':
                             cols[2].success("🟢 BUY")
@@ -781,7 +812,7 @@ def main():
 
                         # Quick indicators
                         with cols[3]:
-                            st.caption(f"RSI: {signal_data['indicators']['RSI']".1f"}")
+                            st.caption(f"RSI: {signal_data['indicators']['RSI']:.1f}")
 
     # Main content
     col1, col2 = st.columns([2, 1])
@@ -804,9 +835,9 @@ def main():
                     # Signal strength indicators
                     indicators = analysis_result['indicators']
                     cols = st.columns(4)
-                    cols[0].metric("Current Price", f"${analysis_result['current_price']".2f"}")
-                    cols[1].metric("RSI", f"{indicators['RSI']".1f"}")
-                    cols[2].metric("20-day Momentum", f"{indicators['momentum']".2%"}")
+                    cols[0].metric("Current Price", f"${analysis_result['current_price']:.2f}")
+                    cols[1].metric("RSI", f"{indicators['RSI']:.1f}")
+                    cols[2].metric("20-day Momentum", f"{indicators['momentum']:.2%}")
                     cols[3].metric("Suggested Quantity", analysis_result['suggested_quantity'])
 
                     # Plot
@@ -883,11 +914,11 @@ def main():
 
                         # Momentum Signal
                         if indicators['momentum'] > 0.05:
-                            st.success(f"🟢 Momentum: Strong (+{indicators['momentum']".2%"})")
+                            st.success(f"🟢 Momentum: Strong (+{indicators['momentum']:.2%})")
                         elif indicators['momentum'] < -0.05:
-                            st.error(f"🔴 Momentum: Weak ({indicators['momentum']".2%"})")
+                            st.error(f"🔴 Momentum: Weak ({indicators['momentum']:.2%})")
                         else:
-                            st.info(f"🟡 Momentum: Neutral ({indicators['momentum']".2%"})")
+                            st.info(f"🟡 Momentum: Neutral ({indicators['momentum']:.2%})")
 
                         # MA Signal
                         if indicators['SMA_20'] > indicators['SMA_50']:
@@ -912,10 +943,10 @@ def main():
             if account_info:
                 cols = st.columns(2)
                 cols[0].metric("Account Status", account_info['status'])
-                cols[1].metric("Cash Balance", f"${float(account_info['cash'])",.2f"}")
+                cols[1].metric("Cash Balance", f"${float(account_info['cash']):,.2f}")
 
-                st.metric("Portfolio Value", f"${float(account_info['portfolio_value'])",.2f"}")
-                st.metric("Buying Power", f"${float(account_info['buying_power'])",.2f"}")
+                st.metric("Portfolio Value", f"${float(account_info['portfolio_value']):,.2f}")
+                st.metric("Buying Power", f"${float(account_info['buying_power']):,.2f}")
 
             # Active Orders
             st.subheader("📋 Active Orders")
@@ -946,8 +977,8 @@ def main():
                     cols = st.columns(4)
                     cols[0].write(f"**{position.symbol}**")
                     cols[1].write(f"{position.qty} shares")
-                    cols[2].write(f"${float(position.avg_entry_price)",".2f"}")
-                    cols[3].write(f"${float(position.unrealized_pl)",".2f"}")
+                    cols[2].write(f"${float(position.avg_entry_price):.2f}")
+                    cols[3].write(f"${float(position.unrealized_pl):.2f}")
             else:
                 st.info("ℹ️ No current positions")
 
@@ -964,7 +995,7 @@ def main():
                     cols = st.columns([2, 1, 1])
                     cols[0].write(f"**{symbol}**")
                     cols[1].write(f"{position['quantity']} shares")
-                    cols[2].write(f"${position['avg_price']".2f"}")
+                    cols[2].write(f"${position['avg_price']:.2f}")
 
             # Trade history
             if portfolio.trade_history:
@@ -972,15 +1003,15 @@ def main():
                 recent_trades = portfolio.trade_history[-5:]  # Last 5 trades
                 for trade in reversed(recent_trades):
                     if trade['type'] == 'BUY':
-                        st.success(f"BUY {trade['symbol']} @ ${trade['price']".2f"}")
+                        st.success(f"BUY {trade['symbol']} @ ${trade['price']:.2f}")
                     else:
                         profit_color = "🟢" if trade['profit'] > 0 else "🔴"
-                        st.error(f"SELL {trade['symbol']} @ ${trade['price']".2f"} {profit_color} ${trade['profit']".2f"}")
+                        st.error(f"SELL {trade['symbol']} @ ${trade['price']:.2f} {profit_color} ${trade['profit']:.2f}")
 
             # Portfolio metrics
             st.subheader("Portfolio Metrics")
             cols = st.columns(3)
-            cols[0].metric("Current Balance", f"${portfolio.balance",.2f"}")
+            cols[0].metric("Current Balance", f"${portfolio.balance:.2f}")
             cols[1].metric("Total Trades", len(portfolio.trade_history))
 
             if portfolio.trade_history:
@@ -988,8 +1019,8 @@ def main():
                 if profits:
                     total_profit = sum(profits)
                     win_rate = len([p for p in profits if p > 0]) / len(profits) * 100
-                    cols[2].metric("Total P&L", f"${total_profit",.2f"}", delta=f"${total_profit",.2f"}")
-                    st.metric("Win Rate", f"{win_rate".1f"}%")
+                    cols[2].metric("Total P&L", f"${total_profit:.2f}", delta=f"${total_profit:.2f}")
+                    st.metric("Win Rate", f"{win_rate:.1f}%")
 
         # Performance Chart
         if portfolio.trade_history:
