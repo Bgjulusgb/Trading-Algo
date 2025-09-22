@@ -1,0 +1,48 @@
+{
+    "alpaca": {
+        "api_key": "YOUR_ALPACA_API_KEY_HERE",
+        "secret_key": "YOUR_ALPACA_SECRET_KEY_HERE",
+        "base_url": "https://paper-api.alpaca.markets",
+        "data_url": "https://data.alpaca.markets"
+    },
+    "trading": {
+        "symbols": ["AAPL", "GOOGL", "MSFT", "TSLA", "NVDA", "SPY", "QQQ"],
+        "max_position_size": 0.1,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.04,
+        "min_confidence": 0.6,
+        "risk_per_trade": 0.01
+    },
+    "strategies": {
+        "rsi": {
+            "enabled": true,
+            "period": 14,
+            "oversold": 30,
+            "overbought": 70,
+            "weight": 0.25
+        },
+        "macd": {
+            "enabled": true,
+            "fast_period": 12,
+            "slow_period": 26,
+            "signal_period": 9,
+            "weight": 0.25
+        },
+        "bollinger": {
+            "enabled": true,
+            "period": 20,
+            "std_dev": 2,
+            "weight": 0.25
+        },
+        "ma_crossover": {
+            "enabled": true,
+            "fast_ma": 10,
+            "slow_ma": 30,
+            "weight": 0.25
+        }
+    },
+    "data": {
+        "update_interval": 60,
+        "lookback_days": 100
+    }
+}
